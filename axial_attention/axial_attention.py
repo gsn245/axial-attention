@@ -21,19 +21,24 @@ def sort_and_return_indices(arr):
 # also calculates the inverse permutation to bring the tensor back to its original shape
 
 def calculate_permutations(num_dimensions, emb_dim):
-    total_dimensions = num_dimensions + 2
-    emb_dim = emb_dim if emb_dim > 0 else (emb_dim + total_dimensions)
-    axial_dims = [ind for ind in range(1, total_dimensions) if ind != emb_dim]
+    """
+    Purpose: create list of all possible tensor permutations that go [0, axial dimensions (in different orders), embedding dimension]
+    num_dimensions = number of axial dimensions (images is 2, video is 3, or more)
+    emb_dim = where is the embedding dimension (pass dim_index to it)
+    """
+    total_dimensions = num_dimensions + 2 # 1 for channel, 1 for padding in range fxns below
+    emb_dim = emb_dim if emb_dim > 0 else (emb_dim + total_dimensions) # in case emb_dim is -1 or -2 etc.
+    axial_dims = [ind for ind in range(1, total_dimensions) if ind != emb_dim] # list of dimensions that aren't the embedding
 
     permutations = []
 
     for axial_dim in axial_dims:
         last_two_dims = [axial_dim, emb_dim]
-        dims_rest = set(range(0, total_dimensions)) - set(last_two_dims)
-        permutation = [*dims_rest, *last_two_dims]
-        permutations.append(permutation)
+        dims_rest = set(range(0, total_dimensions)) - set(last_two_dims) # calcs all dims that arent in last_two_dims
+        permutation = [*dims_rest, *last_two_dims] #unpacks and orders last_two_dims and dims_rest
+        permutations.append(permutation) #appends permutation
       
-    return permutations
+    return permutations #list of all possible tensor permutations that go [0, axial dimensions (in different orders), embedding dimension]
 
 # helper classes
 
@@ -136,6 +141,7 @@ class SelfAttention(nn.Module):
         q, k, v = (self.to_q(x), *self.to_kv(kv).chunk(2, dim=-1))
 
         b, t, d, h, e = *q.shape, self.heads, self.dim_heads
+            #b = batch?, t = dim 1?, d = dim 2?, h = # of heads, e = size of heads BUT WOULDN'T THIS BREAK FOR MORE DIMS?????/
 
         merge_heads = lambda x: x.reshape(b, -1, h, e).transpose(1, 2).reshape(b * h, -1, e)
         q, k, v = map(merge_heads, (q, k, v))
@@ -151,16 +157,27 @@ class SelfAttention(nn.Module):
 # axial attention class
 
 class AxialAttention(nn.Module):
+    # THIS IS THE ONE I USE
+    """
+    dim = embedding dimension
+    num_dimensions = number of axial dimensions (images is 2, video is 3, or more)
+    heads = number of heads for multi-head attention (dim % heads must not be 0)
+    dim_heads = dimension of each head. defaults to dim // heads if not supplied
+    dim_index = where is the embedding dimension
+    sum_axial_out = whether to sum the contributions of attention on each axis, or to run the input through them sequentially. defaults to true
+    """
     def __init__(self, dim, num_dimensions = 2, heads = 8, dim_heads = None, dim_index = -1, sum_axial_out = True):
-        assert (dim % heads) == 0, 'hidden dimension must be divisible by number of heads'
+        assert (dim % heads) == 0, 'hidden dimension must be divisible by number of heads' #WHY? CHECK 
         super().__init__()
-        self.dim = dim
-        self.total_dimensions = num_dimensions + 2
+        self.dim = dim 
+        self.total_dimensions = num_dimensions + 2 #WHY ADD 2? 1 for channel, 1 for batch?
         self.dim_index = dim_index if dim_index > 0 else (dim_index + self.total_dimensions)
 
         attentions = []
-        for permutation in calculate_permutations(num_dimensions, dim_index):
+        for permutation in calculate_permutations(num_dimensions, dim_index): #line 23, list of all tensor permutations that go [0, axial dimensions, embedding dimension]
             attentions.append(PermuteToFrom(permutation, SelfAttention(dim, heads, dim_heads)))
+            #PermuteToFrom = 
+            #SelfAttention = 
 
         self.axial_attentions = nn.ModuleList(attentions)
         self.sum_axial_out = sum_axial_out
@@ -169,13 +186,15 @@ class AxialAttention(nn.Module):
         assert len(x.shape) == self.total_dimensions, 'input tensor does not have the correct number of dimensions'
         assert x.shape[self.dim_index] == self.dim, 'input tensor does not have the correct input dimension'
 
+        #if summing attention across axes
         if self.sum_axial_out:
             return sum(map(lambda axial_attn: axial_attn(x), self.axial_attentions))
 
+        #if hierarchical attention
         out = x
         for axial_attn in self.axial_attentions:
-            out = axial_attn(out)
-        return out
+            out = axial_attn(out) #apply the next (attention) fxn in axial_attentions
+        return out 
 
 # axial image transformer
 
